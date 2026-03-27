@@ -21,6 +21,11 @@ export const managedProfileSchema = z.object({
   planType: z.string().nullable(),
   workspaceLabel: z.string().nullable(),
   workspaceObserved: z.string().nullable(),
+  authFingerprint: z
+    .string()
+    .nullable()
+    .optional()
+    .transform((value) => value ?? null),
   lastVerifiedAt: z.string().nullable(),
   lastRateLimitSnapshot: rateLimitSnapshotSchema,
   isActive: z.boolean(),
@@ -94,6 +99,17 @@ export class ProfileRegistry {
     const state = await this.readState();
     return (
       state.profiles.find((profile) => profile.accountId === accountId) ?? null
+    );
+  }
+
+  async getProfileByAuthFingerprint(
+    authFingerprint: string,
+  ): Promise<ManagedProfile | null> {
+    const state = await this.readState();
+    return (
+      state.profiles.find(
+        (profile) => profile.authFingerprint === authFingerprint,
+      ) ?? null
     );
   }
 

@@ -27,9 +27,9 @@ export interface CodexCreditsSnapshot {
 }
 
 export interface CodexRateLimitWindow {
-  limit?: number | null;
-  remaining?: number | null;
-  resetsAt?: string | null;
+  usedPercent: number;
+  windowDurationMins: number | null;
+  resetsAt: number | null;
 }
 
 export interface CodexRateLimitEntry {
@@ -51,8 +51,14 @@ export interface CodexDoctorResult {
   version: string | null;
 }
 
+export type CodexLoginBrowserStrategy = "native" | "isolated";
+
+export interface CodexLoginOptions {
+  browserStrategy?: CodexLoginBrowserStrategy;
+}
+
 export interface CodexClient {
-  login(profileHome: string): Promise<void>;
+  login(profileHome: string, options?: CodexLoginOptions): Promise<void>;
   run(args: string[], options: CodexRunOptions): Promise<number>;
   getLoginStatus(profileHome: string): Promise<string>;
   getAccountSnapshot(profileHome: string): Promise<CodexAccountSnapshot | null>;

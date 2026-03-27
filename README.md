@@ -4,15 +4,24 @@
 
 It keeps each profile in its own `CODEX_HOME`, stores sensitive `auth.json` data in the OS credential store, and lets you switch manually between profiles without overwriting one shared Codex login state.
 
+The repository also ships a Windows-only tray app that uses the CLI as its backend. The tray app gives you a global active-profile switcher for future Codex launches, shows best-effort remaining usage and reset times, and can automatically discover a new raw `codex login` from the default `~/.codex/auth.json`.
+
+See [docs/login-flow.md](docs/login-flow.md) for a sanitized write-up of the observed Codex ChatGPT login flow and workspace-selection findings.
+
 ## Features
 
 - Multiple isolated Codex profiles
 - `import-current` to capture an existing Codex login
 - `login` with optional auto-naming from `email__chatgpt_account_id`
+- Windows-default isolated browser login, with `--native-browser` as an explicit fallback
 - Same-account dedupe based on `chatgpt_account_id`
+- `authFingerprint` tracking so external logins and token refreshes can be synchronized safely
 - Best-effort workspace title detection from ChatGPT JWT claims
+- `sync-current` to import or switch to the current raw Codex login
+- `--json` output for tray/frontend integrations
 - `run` passthrough so Codex launches under the selected profile
 - Optional shell hook so `codex` can transparently route through `codex-switch`
+- Windows tray app for one-click manual profile switching
 
 ## Requirements
 
@@ -33,7 +42,40 @@ For local CLI usage:
 npm link
 ```
 
+For the Windows tray app, `codex-switch.cmd` should be available in `PATH`. If you prefer not to `npm link`, set `CODEX_SWITCH_TRAY_COMMAND` to the command or full path you want the tray app to launch.
+
 ## Basic Usage
+
+### Windows PowerShell Quick Start
+
+If you want the shortest path on Windows:
+
+```powershell
+npm install
+npm run build
+npm link
+codex-switch import-current
+codex-switch list
+codex-switch use "<your-profile>"
+Invoke-Expression (& codex-switch shell init pwsh | Out-String)
+codex
+```
+
+What each step does:
+
+- `npm link`: makes `codex-switch` available as a global command so the tray app and your shell can find it
+- `import-current`: captures the login currently stored in the default `~/.codex`
+- `list`: shows the profiles currently managed by `codex-switch`
+- `use`: marks one profile as the active profile
+- `shell init pwsh`: teaches the current PowerShell session to route `codex` through `codex-switch run`
+- `codex`: after the shell hook is loaded, this starts Codex under the active managed profile
+
+If you want the shell hook every time PowerShell starts, add it to `$PROFILE`:
+
+```powershell
+if (!(Test-Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force }
+Add-Content $PROFILE 'Invoke-Expression (& codex-switch shell init pwsh | Out-String)'
+```
 
 Import the currently logged-in Codex state:
 
@@ -46,7 +88,13 @@ Create a new profile through the official login flow:
 ```bash
 codex-switch login
 codex-switch login team-a
+codex-switch login --isolated-browser
+codex-switch login --native-browser
 ```
+
+On Windows, plain `codex-switch login` now defaults to the isolated-browser flow. `codex-switch` opens the ChatGPT OAuth flow in an isolated Chrome/Edge user-data directory, then completes the localhost callback and `/oauth/token` exchange itself before storing the resulting `auth.json` in the managed profile. This keeps the browser portion of the official flow while avoiding some broken session state in the everyday browser profile and the upstream token-exchange transport issue we observed in practice.
+
+Use `--native-browser` if you explicitly want the old behavior and let the upstream `codex login` command control both the browser launch and token exchange. Use `--isolated-browser` if you want to force the self-managed isolated flow explicitly in scripts or cross-check behavior.
 
 View and switch profiles:
 
@@ -54,6 +102,7 @@ View and switch profiles:
 codex-switch list
 codex-switch status --all
 codex-switch use team-a
+codex-switch sync-current
 ```
 
 Run Codex under the active profile:
@@ -71,12 +120,55 @@ codex-switch shell init bash
 codex-switch shell init zsh
 ```
 
+Machine-readable output is available for integrations:
+
+```bash
+codex-switch list --json
+codex-switch status --all --json
+codex-switch use team-a --json
+codex-switch sync-current --json
+```
+
+### Tray App Quick Start
+
+1. Run `npm link` once so `codex-switch.cmd` is in `PATH`.
+2. Start `windows-tray/publish/win-x64/CodexSwitch.Tray.exe`.
+3. In the tray menu, use `Add Profile` or `Import Current Login`.
+4. Click a profile to make it active.
+5. Launch future managed Codex sessions with `codex-switch run`, or use the PowerShell shell hook so plain `codex` follows the active profile.
+
+## Windows Tray App
+
+The tray app is in `windows-tray/CodexSwitch.Tray`. It does not replace every running Codex session in the system. Instead, it maintains one global active profile for the managed `codex-switch` flow, so the next terminal/Codex process you launch through that flow uses the selected profile.
+
+The tray app:
+
+- shows all managed profiles in the system tray
+- displays best-effort workspace, remaining usage, and reset time
+- lets you click a profile to make it active
+- supports `Add Profile` and `Import Current Login`
+- watches the default `~/.codex/auth.json` and syncs newly detected external logins
+
+Build and test it with:
+
+```bash
+npm run build:tray
+npm run test:tray
+```
+
+Publish a Windows binary with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/publish-windows-tray.ps1
+```
+
 ## Command Summary
 
-- `codex-switch login [profile]`
+- `codex-switch login [profile] [--isolated-browser|--native-browser]`
 - `codex-switch import-current [profile]`
 - `codex-switch list`
 - `codex-switch status [--all|--profile <name>]`
+- `codex-switch sync-current`
 - `codex-switch use <profile>`
 - `codex-switch run [--profile <name>] -- <codex args...>`
 - `codex-switch doctor`
@@ -87,6 +179,27 @@ codex-switch shell init zsh
 - Sensitive authentication material is stored in the system credential store, not committed to the repository.
 - Managed profile homes keep non-sensitive Codex state and sanitized skeleton files only.
 - Workspace detection is best-effort and intended for display, not as a stable unique identifier.
+- The tray app and CLI switch a managed global active profile for future launches. They do not take over already-running terminals, the official Codex desktop app, or the VS Code Codex extension.
+
+## FAQ
+
+### Why is the default profile name something like `reviewer@example.com__66414859-b7e5-42c4-a8f4-549b05779e09`?
+
+That is the current auto-generated naming rule for imports and logins without a manually supplied profile name:
+
+- left side: the ChatGPT email found in the login token
+- right side: the ChatGPT account/workspace identifier (`chatgpt_account_id`)
+
+This is intentionally stable and dedupe-friendly, because the right-hand identifier is what `codex-switch` uses to recognize â€œthe same profileâ€ across re-imports and logins.
+
+If you want a friendlier label, pass one explicitly:
+
+```bash
+codex-switch import-current team-a
+codex-switch login personal
+```
+
+The underlying profile still keeps the account/workspace metadata internally even if the display name is friendlier.
 
 ## Development
 
@@ -94,6 +207,8 @@ codex-switch shell init zsh
 npm test
 npm run check
 npm run build
+npm run test:tray
+npm run build:tray
 ```
 
 ## License

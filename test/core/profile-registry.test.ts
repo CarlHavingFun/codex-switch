@@ -18,6 +18,7 @@ function createProfile(overrides: Partial<ManagedProfile> = {}): ManagedProfile 
     planType: "plus",
     workspaceLabel: "Workspace A",
     workspaceObserved: null,
+    authFingerprint: "fingerprint-1",
     lastVerifiedAt: null,
     lastRateLimitSnapshot: null,
     isActive: false,
@@ -50,6 +51,7 @@ describe("ProfileRegistry", () => {
       id: "profile-2",
       displayName: "personal",
       codexHome: "/profiles/personal/home",
+      authFingerprint: "fingerprint-2",
       workspaceLabel: "Workspace B",
     });
 
@@ -65,6 +67,12 @@ describe("ProfileRegistry", () => {
     await expect(registry.getProfileByName("work")).resolves.toMatchObject({
       id: "profile-1",
       isActive: false,
+    });
+    await expect(
+      registry.getProfileByAuthFingerprint("fingerprint-2"),
+    ).resolves.toMatchObject({
+      id: "profile-2",
+      displayName: "personal",
     });
   });
 });

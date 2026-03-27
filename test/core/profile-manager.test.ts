@@ -137,6 +137,7 @@ describe("ProfileManager", () => {
     expect(profile.authMode).toBe("chatgpt");
     expect(profile.accountId).toBe("acct_import");
     expect(profile.workspaceLabel).toBe("Workspace A");
+    expect(profile.authFingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(profile.isActive).toBe(true);
     expect(await secretStore.load(profile.id)).toContain("\"acct_import\"");
     await expect(readFile(join(profile.codexHome, "config.toml"), "utf8")).resolves.toContain(
@@ -569,6 +570,210 @@ describe("ProfileManager", () => {
     expect(status.rateLimits?.rateLimits.credits?.balance).toBe("12.00");
     expect(status.profile.planType).toBe("team");
     expect(status.profile.lastVerifiedAt).not.toBeNull();
+    expect(status.usageSummary).toEqual({
+      usageKind: "credits",
+      creditsBalance: "12.00",
+      primaryUsedPercent: null,
+      primaryRemainingPercent: null,
+      primaryResetsAt: null,
+      secondaryUsedPercent: null,
+      secondaryRemainingPercent: null,
+      secondaryResetsAt: null,
+      displayPlanType: "team",
+    });
+  });
+
+  test("normalizes window-based rate limits into a tray-friendly usage summary", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "codex-switch-manager-"));
+    const currentCodexHome = join(rootDir, "current");
+    const registry = new ProfileRegistry(rootDir);
+    const secretStore = new InMemorySecretStore();
+    const codexClient = new FakeCodexClient();
+    const manager = new ProfileManager({
+      registry,
+      secretStore,
+      codexClient,
+      rootDir,
+      currentCodexHome,
+    });
+
+    await seedCurrentCodexHome(currentCodexHome, "acct_status_window");
+    await manager.importCurrent("windowed");
+    codexClient.accountSnapshot = {
+      requiresOpenaiAuth: false,
+      account: {
+        type: "chatgpt",
+        email: "person@example.com",
+        planType: "pro",
+      },
+    };
+    codexClient.rateLimitSnapshot = {
+      rateLimits: {
+        limitId: "codex",
+        limitName: "Codex",
+        primary: {
+          usedPercent: 42,
+          windowDurationMins: 60,
+          resetsAt: 1_735_693_200,
+        },
+        secondary: {
+          usedPercent: 5,
+          windowDurationMins: 1_440,
+          resetsAt: 1_735_736_400,
+        },
+        credits: null,
+        planType: "pro",
+      },
+      rateLimitsByLimitId: {
+        codex: {
+          limitId: "codex",
+          limitName: "Codex",
+          primary: {
+            usedPercent: 42,
+            windowDurationMins: 60,
+            resetsAt: 1_735_693_200,
+          },
+          secondary: {
+            usedPercent: 5,
+            windowDurationMins: 1_440,
+            resetsAt: 1_735_736_400,
+          },
+          credits: null,
+          planType: "pro",
+        },
+      },
+    };
+
+    const status = await manager.status({ profileName: "windowed" });
+
+    expect(status.usageSummary).toEqual({
+      usageKind: "window",
+      creditsBalance: null,
+      primaryUsedPercent: 42,
+      primaryRemainingPercent: 58,
+      primaryResetsAt: 1_735_693_200,
+      secondaryUsedPercent: 5,
+      secondaryRemainingPercent: 95,
+      secondaryResetsAt: 1_735_736_400,
+      displayPlanType: "pro",
+    });
+  });
+
+  test("syncCurrent imports a newly discovered external login and marks it active", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "codex-switch-manager-"));
+    const currentCodexHome = join(rootDir, "current");
+    const registry = new ProfileRegistry(rootDir);
+    const secretStore = new InMemorySecretStore();
+    const manager = new ProfileManager({
+      registry,
+      secretStore,
+      codexClient: new FakeCodexClient(),
+      rootDir,
+      currentCodexHome,
+    });
+
+    await seedCurrentCodexHome(currentCodexHome, "acct_external", {
+      email: "outside@example.com",
+      organizations: [{ id: "org-external", title: "External Workspace", is_default: true }],
+    });
+
+    const result = await manager.syncCurrent();
+    const active = await registry.getActiveProfile();
+
+    expect(result.action).toBe("created");
+    expect(result.profile.displayName).toBe("outside@example.com__acct_external");
+    expect(result.profile.workspaceObserved).toBe("External Workspace");
+    expect(result.profile.authFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(active?.id).toBe(result.profile.id);
+  });
+
+  test("syncCurrent updates the active managed profile when the token fingerprint changes", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "codex-switch-manager-"));
+    const currentCodexHome = join(rootDir, "current");
+    const registry = new ProfileRegistry(rootDir);
+    const secretStore = new InMemorySecretStore();
+    const manager = new ProfileManager({
+      registry,
+      secretStore,
+      codexClient: new FakeCodexClient(),
+      rootDir,
+      currentCodexHome,
+    });
+
+    const firstAuth = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        account_id: "acct_sync",
+        access_token: "access-one",
+        refresh_token: "refresh-one",
+        id_token: createChatgptJwt({
+          email: "sync@example.com",
+          accountId: "acct_sync",
+          organizations: [{ id: "org-sync", title: "Workspace One", is_default: true }],
+        }),
+      },
+    });
+    await mkdir(currentCodexHome, { recursive: true });
+    await writeFile(join(currentCodexHome, "config.toml"), 'model = "gpt-5"', "utf8");
+    await writeFile(join(currentCodexHome, "auth.json"), firstAuth, "utf8");
+
+    const imported = await manager.importCurrent(undefined);
+
+    const secondAuth = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        account_id: "acct_sync",
+        access_token: "access-two",
+        refresh_token: "refresh-two",
+        id_token: createChatgptJwt({
+          email: "sync@example.com",
+          accountId: "acct_sync",
+          organizations: [{ id: "org-sync", title: "Workspace Two", is_default: true }],
+        }),
+      },
+    });
+    await writeFile(join(currentCodexHome, "auth.json"), secondAuth, "utf8");
+
+    const result = await manager.syncCurrent();
+
+    expect(result.action).toBe("updated");
+    expect(result.profile.id).toBe(imported.id);
+    expect(result.profile.workspaceObserved).toBe("Workspace Two");
+    expect(result.profile.authFingerprint).not.toBe(imported.authFingerprint);
+  });
+
+  test("syncCurrent switches the active profile when the external login matches a known inactive account", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "codex-switch-manager-"));
+    const currentCodexHome = join(rootDir, "current");
+    const registry = new ProfileRegistry(rootDir);
+    const secretStore = new InMemorySecretStore();
+    const manager = new ProfileManager({
+      registry,
+      secretStore,
+      codexClient: new FakeCodexClient(),
+      rootDir,
+      currentCodexHome,
+    });
+
+    await seedCurrentCodexHome(currentCodexHome, "acct_work");
+    await manager.importCurrent("work");
+    await seedCurrentCodexHome(currentCodexHome, "acct_personal", {
+      email: "personal@example.com",
+      organizations: [{ id: "org-personal", title: "Personal", is_default: true }],
+    });
+    const personal = await manager.importCurrent("personal");
+    await manager.use("work");
+    await seedCurrentCodexHome(currentCodexHome, "acct_personal", {
+      email: "personal@example.com",
+      organizations: [{ id: "org-personal", title: "Personal", is_default: true }],
+    });
+
+    const result = await manager.syncCurrent();
+    const active = await registry.getActiveProfile();
+
+    expect(result.action).toBe("switched");
+    expect(result.profile.id).toBe(personal.id);
+    expect(active?.id).toBe(personal.id);
   });
 
   test("switches the active profile explicitly", async () => {

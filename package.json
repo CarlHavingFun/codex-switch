@@ -14,8 +14,14 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:tray": "dotnet build windows-tray/CodexSwitch.Tray.sln",
     "check": "tsc -p tsconfig.json --noEmit",
+    "debug:attach-cdp": "node --import tsx scripts/attach-chrome-cdp.ts",
+    "debug:login-flow": "node --import tsx scripts/inspect-login-flow.ts",
+    "debug:login-flow:cdp": "node --import tsx scripts/inspect-login-flow-cdp.ts",
+    "publish:tray": "powershell -ExecutionPolicy Bypass -File scripts/publish-windows-tray.ps1",
     "test": "vitest run",
+    "test:tray": "dotnet test windows-tray/CodexSwitch.Tray.sln",
     "test:watch": "vitest",
     "dev": "tsx src/cli.ts"
   },

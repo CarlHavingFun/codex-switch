@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { stat } from "node:fs/promises";
+import { join } from "node:path";
 
 import { execa } from "execa";
 import { z } from "zod";
@@ -7,9 +8,11 @@ import type {
   CodexAccountSnapshot,
   CodexClient,
   CodexDoctorResult,
+  CodexLoginOptions,
   CodexRateLimitSnapshot,
   CodexRunOptions,
 } from "./codex-client.js";
+import { performOauthBrowserLogin } from "./oauth-browser-login.js";
 
 const accountSnapshotSchema = z.object({
   account: z
@@ -30,8 +33,20 @@ const accountSnapshotSchema = z.object({
 const rateLimitEntrySchema = z.object({
   limitId: z.string().nullable(),
   limitName: z.string().nullable(),
-  primary: z.record(z.string(), z.unknown()).nullable(),
-  secondary: z.record(z.string(), z.unknown()).nullable(),
+  primary: z
+    .object({
+      usedPercent: z.number(),
+      windowDurationMins: z.number().nullable(),
+      resetsAt: z.number().nullable(),
+    })
+    .nullable(),
+  secondary: z
+    .object({
+      usedPercent: z.number(),
+      windowDurationMins: z.number().nullable(),
+      resetsAt: z.number().nullable(),
+    })
+    .nullable(),
   credits: z
     .object({
       hasCredits: z.boolean(),
@@ -64,6 +79,15 @@ interface JsonRpcResponse {
   };
 }
 
+interface CodexAppServerProcess {
+  stdin: NodeJS.WritableStream;
+  stdout: NodeJS.ReadableStream;
+  stderr: NodeJS.ReadableStream;
+  kill(signal?: NodeJS.Signals | number): boolean;
+  on(event: "error", listener: (error: Error) => void): this;
+  on(event: "close", listener: (code: number | null) => void): this;
+}
+
 export class CodexProcessClient implements CodexClient {
   private readonly command: string;
   private readonly commandArgs: string[];
@@ -77,7 +101,12 @@ export class CodexProcessClient implements CodexClient {
     this.timeoutMs = options.timeoutMs ?? 15_000;
   }
 
-  async login(profileHome: string): Promise<void> {
+  async login(profileHome: string, options: CodexLoginOptions = {}): Promise<void> {
+    if (options.browserStrategy === "isolated") {
+      await this.loginWithIsolatedBrowser(profileHome);
+      return;
+    }
+
     await execa(this.command, [...this.commandArgs, "login"], {
       env: {
         ...this.baseEnv,
@@ -110,7 +139,7 @@ export class CodexProcessClient implements CodexClient {
       },
     );
 
-    return result.stdout.trim();
+    return result.stdout.trim() || result.stderr.trim();
   }
 
   async getAccountSnapshot(profileHome: string): Promise<CodexAccountSnapshot | null> {
@@ -166,17 +195,21 @@ export class CodexProcessClient implements CodexClient {
     params: Record<string, unknown>,
   ): Promise<unknown> {
     return new Promise<unknown>((resolve, reject) => {
-      const child = spawn(
+      const child = execa(
         this.command,
         [...this.commandArgs, "app-server", "--listen", "stdio://"],
         {
+          cleanup: false,
           env: {
             ...this.baseEnv,
             CODEX_HOME: profileHome,
           },
-          stdio: ["pipe", "pipe", "pipe"],
+          reject: false,
+          stdin: "pipe",
+          stdout: "pipe",
+          stderr: "pipe",
         },
-      );
+      ) as unknown as CodexAppServerProcess;
       const responses = new Map<number, JsonRpcResponse>();
       const stderrChunks: string[] = [];
       let stdoutBuffer = "";
@@ -267,5 +300,17 @@ export class CodexProcessClient implements CodexClient {
       );
       child.stdin.end();
     });
+  }
+
+  private async loginWithIsolatedBrowser(profileHome: string): Promise<void> {
+    await performOauthBrowserLogin({
+      profileHome,
+      env: this.baseEnv,
+      browserStrategy: "isolated",
+      timeoutMs: Math.max(this.timeoutMs, 30_000),
+    });
+
+    const authPath = join(profileHome, "auth.json");
+    await stat(authPath);
   }
 }

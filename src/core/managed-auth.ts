@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -23,6 +24,11 @@ export interface AuthDocumentSummary {
   workspaceTitle: string | null;
 }
 
+export interface PersistedAuthState {
+  summary: AuthDocumentSummary;
+  authFingerprint: string;
+}
+
 export async function readAuthDocumentFromHome(profileHome: string): Promise<string> {
   return readFile(join(profileHome, "auth.json"), "utf8");
 }
@@ -37,6 +43,10 @@ export function summarizeAuthDocument(authDocument: string): AuthDocumentSummary
     email: claims?.email ?? null,
     workspaceTitle: inferWorkspaceTitle(accountId, claims?.organizations ?? []),
   };
+}
+
+export function fingerprintAuthDocument(authDocument: string): string {
+  return createHash("sha256").update(authDocument, "utf8").digest("hex");
 }
 
 const jwtClaimsSchema = z
@@ -146,14 +156,17 @@ export async function persistAuthFromHome(
   profileId: string,
   profileHome: string,
   secretStore: SecretStore,
-): Promise<AuthDocumentSummary> {
+): Promise<PersistedAuthState> {
   const authPath = join(profileHome, "auth.json");
   const authDocument = await readAuthDocumentFromHome(profileHome);
 
   await secretStore.save(profileId, authDocument);
   await rm(authPath, { force: true });
 
-  return summarizeAuthDocument(authDocument);
+  return {
+    summary: summarizeAuthDocument(authDocument),
+    authFingerprint: fingerprintAuthDocument(authDocument),
+  };
 }
 
 export async function hydrateAuthIntoHome(

@@ -5,6 +5,7 @@ import { describe, expect, test } from "vitest";
 
 import { InMemorySecretStore } from "../../src/testing/in-memory-secret-store.js";
 import {
+  fingerprintAuthDocument,
   hydrateAuthIntoHome,
   persistAuthFromHome,
   summarizeAuthDocument,
@@ -56,10 +57,17 @@ describe("managed-auth", () => {
 
     await writeFile(authPath, authJson, "utf8");
 
-    await persistAuthFromHome("profile-1", profileHome, secretStore);
+    const persisted = await persistAuthFromHome("profile-1", profileHome, secretStore);
 
     await expect(secretStore.load("profile-1")).resolves.toBe(authJson);
     await expect(readFile(authPath, "utf8")).rejects.toThrow();
+    expect(persisted.authFingerprint).toBe(fingerprintAuthDocument(authJson));
+    expect(persisted.summary).toEqual({
+      authMode: "chatgpt",
+      accountId: "acct_123",
+      email: null,
+      workspaceTitle: null,
+    });
   });
 
   test("hydrates auth.json from the secret store before running Codex", async () => {
@@ -136,5 +144,23 @@ describe("managed-auth", () => {
       email: "person@example.com",
       workspaceTitle: "Workspace Prime",
     });
+  });
+
+  test("computes a stable auth fingerprint from the raw auth document", () => {
+    const authJson = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        account_id: "acct_fingerprint",
+        access_token: "access",
+        refresh_token: "refresh",
+        id_token: "id",
+      },
+    });
+
+    expect(fingerprintAuthDocument(authJson)).toMatch(/^[a-f0-9]{64}$/);
+    expect(fingerprintAuthDocument(authJson)).toBe(fingerprintAuthDocument(authJson));
+    expect(fingerprintAuthDocument(`${authJson}\n`)).not.toBe(
+      fingerprintAuthDocument(authJson),
+    );
   });
 });

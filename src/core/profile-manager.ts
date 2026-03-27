@@ -5,12 +5,14 @@ import { join } from "node:path";
 import type {
   CodexAccountSnapshot,
   CodexClient,
+  CodexLoginBrowserStrategy,
   CodexRateLimitSnapshot,
 } from "./codex-client.js";
 import { createManagedProfileHome, createProfileSkeleton } from "./profile-home.js";
 import { ProfileLock } from "./profile-lock.js";
 import { ProfileRegistry, type ManagedProfile } from "./profile-registry.js";
 import {
+  fingerprintAuthDocument,
   hydrateAuthIntoHome,
   persistAuthFromHome,
   readAuthDocumentFromHome,
@@ -31,6 +33,10 @@ export interface ProfileMutationOptions {
   workspaceLabel?: string | null;
 }
 
+export interface LoginProfileOptions {
+  browserStrategy?: CodexLoginBrowserStrategy;
+}
+
 export interface RunProfileOptions {
   profileName?: string;
   args: string[];
@@ -43,10 +49,31 @@ export interface ProfileStatus {
   account: CodexAccountSnapshot["account"] | null;
   rateLimits: CodexRateLimitSnapshot | null;
   requiresOpenaiAuth: boolean | null;
+  usageSummary: ProfileUsageSummary;
 }
 
 export interface StatusOptions {
   profileName?: string;
+}
+
+export interface ProfileUsageSummary {
+  usageKind: "credits" | "window" | "unavailable";
+  creditsBalance: string | null;
+  primaryUsedPercent: number | null;
+  primaryRemainingPercent: number | null;
+  primaryResetsAt: number | null;
+  secondaryUsedPercent: number | null;
+  secondaryRemainingPercent: number | null;
+  secondaryResetsAt: number | null;
+  displayPlanType: string | null;
+}
+
+export interface SyncCurrentResult {
+  action: "noop" | "created" | "updated" | "switched";
+  profile: ManagedProfile | null;
+  authSummary: AuthDocumentSummary | null;
+  authFingerprint: string | null;
+  reason: string | null;
 }
 
 export interface DoctorStatus {
@@ -77,6 +104,7 @@ export class ProfileManager {
   ): Promise<ManagedProfile> {
     const authDocument = await readAuthDocumentFromHome(this.options.currentCodexHome);
     const authSummary = summarizeAuthDocument(authDocument);
+    const authFingerprint = fingerprintAuthDocument(authDocument);
     const profile = await this.ensureImportedProfile(
       displayName,
       authSummary,
@@ -91,6 +119,7 @@ export class ProfileManager {
       authMode: authSummary.authMode,
       accountId: authSummary.accountId,
       workspaceObserved: authSummary.workspaceTitle ?? profile.workspaceObserved,
+      authFingerprint,
     });
     await this.options.registry.setActiveProfile(saved.id);
 
@@ -100,12 +129,16 @@ export class ProfileManager {
   async login(
     displayName?: string,
     mutation: ProfileMutationOptions = {},
+    loginOptions: LoginProfileOptions = {},
   ): Promise<ManagedProfile> {
     const loginSandbox = await this.createLoginSandbox();
     try {
-      await this.options.codexClient.login(loginSandbox.profileHome);
+      await this.options.codexClient.login(loginSandbox.profileHome, {
+        browserStrategy: loginOptions.browserStrategy ?? "native",
+      });
       const authDocument = await readAuthDocumentFromHome(loginSandbox.profileHome);
       const authSummary = summarizeAuthDocument(authDocument);
+      const authFingerprint = fingerprintAuthDocument(authDocument);
       const profile = await this.ensureImportedProfile(
         displayName,
         authSummary,
@@ -119,7 +152,11 @@ export class ProfileManager {
         await createProfileSkeleton(loginSandbox.profileHome, profile.codexHome);
         await this.options.secretStore.save(profile.id, authDocument);
 
-        const saved = await this.saveProfileWithAuthSummary(profile, authSummary);
+        const saved = await this.saveProfileWithAuthSummary(
+          profile,
+          authSummary,
+          authFingerprint,
+        );
         await this.options.registry.setActiveProfile(saved.id);
         return (await this.options.registry.getActiveProfile()) ?? saved;
       } finally {
@@ -187,6 +224,11 @@ export class ProfileManager {
         },
       },
     });
+    const usageSummary = createUsageSummary(
+      accountSnapshot?.account ?? null,
+      rateLimits,
+      nextProfile.planType,
+    );
 
     return {
       profile: nextProfile,
@@ -194,6 +236,7 @@ export class ProfileManager {
       account: accountSnapshot?.account ?? null,
       rateLimits,
       requiresOpenaiAuth: accountSnapshot?.requiresOpenaiAuth ?? null,
+      usageSummary,
     };
   }
 
@@ -201,6 +244,73 @@ export class ProfileManager {
     const profile = await this.resolveProfile(displayName);
     await this.options.registry.setActiveProfile(profile.id);
     return (await this.options.registry.getActiveProfile()) ?? profile;
+  }
+
+  async syncCurrent(): Promise<SyncCurrentResult> {
+    let authDocument: string;
+    try {
+      authDocument = await readAuthDocumentFromHome(this.options.currentCodexHome);
+    } catch {
+      return {
+        action: "noop",
+        profile: await this.options.registry.getActiveProfile(),
+        authSummary: null,
+        authFingerprint: null,
+        reason: "current-auth-missing",
+      };
+    }
+
+    const authSummary = summarizeAuthDocument(authDocument);
+    const authFingerprint = fingerprintAuthDocument(authDocument);
+    const existing =
+      (authSummary.accountId
+        ? await this.options.registry.getProfileByAccountId(authSummary.accountId)
+        : null) ??
+      (await this.options.registry.getProfileByAuthFingerprint(authFingerprint));
+
+    if (!existing) {
+      const profile = await this.importCurrent(undefined);
+      return {
+        action: "created",
+        profile,
+        authSummary,
+        authFingerprint,
+        reason: null,
+      };
+    }
+
+    if (existing.authFingerprint === authFingerprint) {
+      if (existing.isActive) {
+        return {
+          action: "noop",
+          profile: existing,
+          authSummary,
+          authFingerprint,
+          reason: "already-active",
+        };
+      }
+
+      const profile = await this.use(existing.displayName);
+      return {
+        action: "switched",
+        profile,
+        authSummary,
+        authFingerprint,
+        reason: null,
+      };
+    }
+
+    const profile = await this.importCurrent(existing.displayName, {
+      workspaceLabel: existing.workspaceLabel,
+    });
+
+    return {
+      action: existing.isActive ? "updated" : "switched",
+      profile,
+      authSummary,
+      authFingerprint,
+      reason: null,
+    };
   }
 
   async list(): Promise<ManagedProfile[]> {
@@ -256,6 +366,7 @@ export class ProfileManager {
       planType: null,
       workspaceLabel: workspaceLabel ?? null,
       workspaceObserved: null,
+      authFingerprint: null,
       lastVerifiedAt: null,
       lastRateLimitSnapshot: null,
       isActive: false,
@@ -323,6 +434,7 @@ export class ProfileManager {
         authMode: null,
         accountId: null,
         workspaceObserved: null,
+        authFingerprint: null,
       });
     }
 
@@ -333,9 +445,11 @@ export class ProfileManager {
     );
     return this.options.registry.saveProfile({
       ...profile,
-      authMode: authSummary.authMode,
-      accountId: authSummary.accountId,
-      workspaceObserved: authSummary.workspaceTitle ?? profile.workspaceObserved,
+      authMode: authSummary.summary.authMode,
+      accountId: authSummary.summary.accountId,
+      workspaceObserved:
+        authSummary.summary.workspaceTitle ?? profile.workspaceObserved,
+      authFingerprint: authSummary.authFingerprint,
     });
   }
 
@@ -382,15 +496,52 @@ export class ProfileManager {
   private async saveProfileWithAuthSummary(
     profile: ManagedProfile,
     authSummary: AuthDocumentSummary,
+    authFingerprint: string,
   ): Promise<ManagedProfile> {
-      const saved = await this.options.registry.saveProfile({
-        ...profile,
-        authMode: authSummary.authMode,
-        accountId: authSummary.accountId,
-        workspaceObserved: authSummary.workspaceTitle ?? profile.workspaceObserved,
-      });
+    const saved = await this.options.registry.saveProfile({
+      ...profile,
+      authMode: authSummary.authMode,
+      accountId: authSummary.accountId,
+      workspaceObserved: authSummary.workspaceTitle ?? profile.workspaceObserved,
+      authFingerprint,
+    });
     return saved;
   }
+}
+
+function createUsageSummary(
+  account: CodexAccountSnapshot["account"] | null,
+  rateLimits: CodexRateLimitSnapshot | null,
+  fallbackPlanType: string | null,
+): ProfileUsageSummary {
+  const primary = rateLimits?.rateLimits.primary ?? null;
+  const secondary = rateLimits?.rateLimits.secondary ?? null;
+  const creditsBalance = rateLimits?.rateLimits.credits?.balance ?? null;
+  const primaryUsedPercent = primary?.usedPercent ?? null;
+  const secondaryUsedPercent = secondary?.usedPercent ?? null;
+  const displayPlanType =
+    account?.type === "chatgpt"
+      ? account.planType
+      : rateLimits?.rateLimits.planType ?? fallbackPlanType;
+
+  return {
+    usageKind:
+      creditsBalance !== null
+        ? "credits"
+        : primaryUsedPercent !== null || secondaryUsedPercent !== null
+          ? "window"
+          : "unavailable",
+    creditsBalance,
+    primaryUsedPercent,
+    primaryRemainingPercent:
+      primaryUsedPercent === null ? null : Math.max(0, 100 - primaryUsedPercent),
+    primaryResetsAt: primary?.resetsAt ?? null,
+    secondaryUsedPercent,
+    secondaryRemainingPercent:
+      secondaryUsedPercent === null ? null : Math.max(0, 100 - secondaryUsedPercent),
+    secondaryResetsAt: secondary?.resetsAt ?? null,
+    displayPlanType,
+  };
 }
 
 function createProfileId(displayName: string): string {
