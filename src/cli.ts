@@ -7,7 +7,7 @@ import type { ProfileStatus } from "./core/profile-manager.js";
 import { renderShellHook, type SupportedShell } from "./cli/shell-hooks.js";
 import { createCliRuntime } from "./cli/runtime.js";
 
-const runtime = createCliRuntime();
+const runtime = await createCliRuntime();
 const program = new Command();
 
 program
@@ -198,6 +198,87 @@ program.command("doctor").action(async () => {
   );
 });
 
+const desktopProgram = program
+  .command("desktop")
+  .description("Launch and monitor the official Codex desktop app on Windows.");
+
+desktopProgram
+  .command("launch")
+  .option("--json", "print structured JSON")
+  .action(async (options: { json?: boolean }) => {
+    const status = await runtime.desktopManager.launch({
+      selfCommand: process.execPath,
+      selfArgs: [...process.execArgv, process.argv[1] ?? ""],
+    });
+    if (options.json) {
+      printJson(status);
+      return;
+    }
+    printDesktopStatus(status);
+  });
+
+desktopProgram
+  .command("status")
+  .option("--json", "print structured JSON")
+  .action(async (options: { json?: boolean }) => {
+    const status = await runtime.desktopManager.status();
+    if (options.json) {
+      printJson(status);
+      return;
+    }
+    printDesktopStatus(status);
+  });
+
+desktopProgram
+  .command("switch")
+  .argument("<profile>", "profile display name")
+  .option("--json", "print structured JSON")
+  .action(async (profile: string, options: { json?: boolean }) => {
+    const status = await runtime.desktopManager.switchProfile({
+      profileName: profile,
+      selfCommand: process.execPath,
+      selfArgs: [...process.execArgv, process.argv[1] ?? ""],
+    });
+    if (options.json) {
+      printJson(status);
+      return;
+    }
+    printDesktopStatus(status);
+  });
+
+hideCommand(
+  desktopProgram
+  .command("monitor")
+  .requiredOption("--session-home <path>", "managed desktop session home")
+  .requiredOption("--desktop-pid <pid>", "desktop process id")
+  .requiredOption("--desktop-executable <path>", "desktop executable path")
+  .option("--launch-profile-id <id>", "profile that seeded the desktop session")
+  .option("--poll-interval-ms <ms>", "poll interval in milliseconds", (value) =>
+    Number.parseInt(value, 10),
+  )
+  .action(
+    async (options: {
+      sessionHome: string;
+      desktopPid: number;
+      desktopExecutable: string;
+      launchProfileId?: string;
+      pollIntervalMs?: number;
+    }) => {
+      await runtime.desktopManager.runMonitor({
+        sessionHome: options.sessionHome,
+        desktopPid:
+          Number.isFinite(options.desktopPid) && options.desktopPid > 0
+            ? options.desktopPid
+            : null,
+        executablePath: options.desktopExecutable,
+        launchProfileId: options.launchProfileId ?? null,
+        pollIntervalMs:
+          Number.isFinite(options.pollIntervalMs) ? options.pollIntervalMs : undefined,
+      });
+    },
+  ),
+);
+
 program
   .command("shell")
   .command("init")
@@ -287,6 +368,35 @@ function printJson(payload: unknown): void {
   console.log(JSON.stringify(payload, null, 2));
 }
 
+function printDesktopStatus(status: {
+  managed: boolean;
+  running: boolean;
+  desktopPid: number | null;
+  monitorPid: number | null;
+  executablePath: string | null;
+  sessionHome: string | null;
+  launchedAt: string | null;
+  launchProfileId: string | null;
+  lastObservedAccountId: string | null;
+  lastObservedProfileId: string | null;
+  lastSyncedAt: string | null;
+  lastError: string | null;
+}): void {
+  console.log(`Managed desktop: ${status.managed}`);
+  console.log(`Running: ${status.running}`);
+  console.log(`Desktop pid: ${status.desktopPid ?? "unknown"}`);
+  console.log(`Monitor pid: ${status.monitorPid ?? "unknown"}`);
+  console.log(`Executable: ${status.executablePath ?? "unknown"}`);
+  console.log(`Session home: ${status.sessionHome ?? "none"}`);
+  console.log(`Launch profile id: ${status.launchProfileId ?? "unknown"}`);
+  console.log(`Observed account id: ${status.lastObservedAccountId ?? "unknown"}`);
+  console.log(`Observed profile id: ${status.lastObservedProfileId ?? "unknown"}`);
+  console.log(`Last synced at: ${status.lastSyncedAt ?? "never"}`);
+  if (status.lastError) {
+    console.log(`Last error: ${status.lastError}`);
+  }
+}
+
 function resolveLoginBrowserStrategy(options: {
   isolatedBrowser?: boolean;
   nativeBrowser?: boolean;
@@ -304,4 +414,9 @@ function resolveLoginBrowserStrategy(options: {
   }
 
   return process.platform === "win32" ? "isolated" : "native";
+}
+
+function hideCommand(command: Command): Command {
+  const maybeHidden = command as Command & { hideHelp?: () => Command };
+  return typeof maybeHidden.hideHelp === "function" ? maybeHidden.hideHelp() : command;
 }

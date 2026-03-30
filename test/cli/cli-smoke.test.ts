@@ -368,4 +368,62 @@ describe("codex-switch CLI", () => {
     },
     20_000,
   );
+
+  test(
+    "reports managed desktop sync status as structured JSON",
+    async () => {
+      const rootDir = await mkdtemp(join(tmpdir(), "codex-switch-cli-"));
+      const currentCodexHome = join(rootDir, "current");
+      const managedHome = join(rootDir, "managed");
+      await seedCurrentCodexHome(currentCodexHome);
+      await mkdir(join(managedHome, "desktop"), { recursive: true });
+      await writeFile(
+        join(managedHome, "desktop", "status.json"),
+        JSON.stringify(
+          {
+            managed: true,
+            running: true,
+            desktopPid: null,
+            monitorPid: null,
+            executablePath: "C:\\Program Files\\WindowsApps\\OpenAI.Codex\\app\\Codex.exe",
+            sessionHome: "C:\\Users\\<user>\\.codex-switch\\desktop\\session\\home",
+            launchedAt: "2026-03-30T00:00:00.000Z",
+            launchProfileId: "fixture-example-com-acct-cli",
+            lastObservedAccountId: "acct_cli",
+            lastObservedProfileId: "fixture-example-com-acct-cli",
+            lastSyncedAt: "2026-03-30T00:01:00.000Z",
+            lastError: null,
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const env = {
+        ...process.env,
+        CODEX_SWITCH_HOME: managedHome,
+        CODEX_SWITCH_CURRENT_CODEX_HOME: currentCodexHome,
+        CODEX_SWITCH_CODEX_COMMAND: process.execPath,
+        CODEX_SWITCH_CODEX_ARGS_JSON: JSON.stringify([fakeCodexScript]),
+      };
+
+      const status = JSON.parse(
+        (await runCli(["desktop", "status", "--json"], env)).stdout,
+      ) as {
+        managed: boolean;
+        running: boolean;
+        lastObservedAccountId: string | null;
+        lastObservedProfileId: string | null;
+      };
+
+      expect(status).toMatchObject({
+        managed: true,
+        running: false,
+        lastObservedAccountId: "acct_cli",
+        lastObservedProfileId: "fixture-example-com-acct-cli",
+      });
+    },
+    20_000,
+  );
 });

@@ -57,6 +57,34 @@ public sealed class ProfileMenuFormatterTests
         Assert.Contains("58% left", summary);
     }
 
+    [Fact]
+    public void FormatDesktopSummary_UsesObservedProfileWhenAvailable()
+    {
+        ManagedProfileDto profile = CreateProfile();
+        DesktopStatusDto status = new(
+            true,
+            true,
+            101,
+            202,
+            @"C:\Program Files\WindowsApps\OpenAI.Codex\app\Codex.exe",
+            @"C:\Users\user\.codex-switch\desktop\session\home",
+            "2026-03-30T00:00:00.000Z",
+            profile.Id,
+            "acct_1",
+            profile.Id,
+            "2026-03-30T00:01:00.000Z",
+            null);
+
+        string summary = ProfileMenuFormatter.FormatDesktopSummary(
+            status,
+            new Dictionary<string, ManagedProfileDto>
+            {
+                [profile.Id] = profile,
+            });
+
+        Assert.Equal("Desktop sync: running | workspace-a", summary);
+    }
+
     private static ManagedProfileDto CreateProfile() =>
         new(
             "profile-1",

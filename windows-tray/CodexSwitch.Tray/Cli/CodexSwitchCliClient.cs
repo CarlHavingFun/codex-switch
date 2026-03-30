@@ -49,6 +49,15 @@ public sealed class CodexSwitchCliClient
     public Task<SyncCurrentResultDto> SyncCurrentAsync(CancellationToken cancellationToken = default) =>
         RunJsonAsync<SyncCurrentResultDto>(new[] { "sync-current", "--json" }, cancellationToken);
 
+    public Task<DesktopStatusDto> GetDesktopStatusAsync(CancellationToken cancellationToken = default) =>
+        RunJsonAsync<DesktopStatusDto>(new[] { "desktop", "status", "--json" }, cancellationToken);
+
+    public Task<DesktopStatusDto> LaunchDesktopAsync(CancellationToken cancellationToken = default) =>
+        RunJsonAsync<DesktopStatusDto>(new[] { "desktop", "launch", "--json" }, cancellationToken);
+
+    public Task<DesktopStatusDto> SwitchDesktopAsync(string displayName, CancellationToken cancellationToken = default) =>
+        RunJsonAsync<DesktopStatusDto>(new[] { "desktop", "switch", displayName, "--json" }, cancellationToken);
+
     private async Task<T> RunJsonAsync<T>(
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken)

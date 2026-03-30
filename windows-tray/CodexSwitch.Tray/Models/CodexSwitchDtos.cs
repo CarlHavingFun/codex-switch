@@ -52,3 +52,17 @@ public sealed record SyncCurrentResultDto(
     AuthSummaryDto? AuthSummary,
     string? AuthFingerprint,
     string? Reason);
+
+public sealed record DesktopStatusDto(
+    bool Managed,
+    bool Running,
+    int? DesktopPid,
+    int? MonitorPid,
+    string? ExecutablePath,
+    string? SessionHome,
+    string? LaunchedAt,
+    string? LaunchProfileId,
+    string? LastObservedAccountId,
+    string? LastObservedProfileId,
+    string? LastSyncedAt,
+    string? LastError);

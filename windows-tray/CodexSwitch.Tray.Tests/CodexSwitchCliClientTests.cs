@@ -83,6 +83,81 @@ public sealed class CodexSwitchCliClientTests
         Assert.True(profile.IsActive);
     }
 
+    [Fact]
+    public async Task GetDesktopStatusAsync_RequestsTheDesktopStatusJson()
+    {
+        var runner = new FakeCliProcessRunner
+        {
+            ResultFactory = arguments =>
+            {
+                Assert.Equal(new[] { "desktop", "status", "--json" }, arguments);
+                return new CliProcessResult(
+                    0,
+                    """
+                    {
+                      "managed": true,
+                      "running": true,
+                      "desktopPid": 101,
+                      "monitorPid": 202,
+                      "executablePath": "C:\\Program Files\\WindowsApps\\OpenAI.Codex\\app\\Codex.exe",
+                      "sessionHome": "C:\\Users\\user\\.codex-switch\\desktop\\session\\home",
+                      "launchedAt": "2026-03-30T00:00:00.000Z",
+                      "launchProfileId": "profile-1",
+                      "lastObservedAccountId": "acct-1",
+                      "lastObservedProfileId": "profile-1",
+                      "lastSyncedAt": "2026-03-30T00:01:00.000Z",
+                      "lastError": null
+                    }
+                    """,
+                    string.Empty);
+            },
+        };
+        var client = new CodexSwitchCliClient(runner);
+
+        DesktopStatusDto status = await client.GetDesktopStatusAsync();
+
+        Assert.True(status.Managed);
+        Assert.True(status.Running);
+        Assert.Equal("acct-1", status.LastObservedAccountId);
+    }
+
+    [Fact]
+    public async Task SwitchDesktopAsync_RequestsDesktopSwitchJson()
+    {
+        var runner = new FakeCliProcessRunner
+        {
+            ResultFactory = arguments =>
+            {
+                Assert.Equal(new[] { "desktop", "switch", "Workspace Two", "--json" }, arguments);
+                return new CliProcessResult(
+                    0,
+                    """
+                    {
+                      "managed": true,
+                      "running": true,
+                      "desktopPid": 303,
+                      "monitorPid": 404,
+                      "executablePath": "C:\\Program Files\\WindowsApps\\OpenAI.Codex\\app\\Codex.exe",
+                      "sessionHome": "C:\\Users\\user\\.codex-switch\\desktop\\session\\home",
+                      "launchedAt": "2026-03-30T00:00:00.000Z",
+                      "launchProfileId": "profile-2",
+                      "lastObservedAccountId": "acct-2",
+                      "lastObservedProfileId": "profile-2",
+                      "lastSyncedAt": "2026-03-30T00:02:00.000Z",
+                      "lastError": null
+                    }
+                    """,
+                    string.Empty);
+            },
+        };
+        var client = new CodexSwitchCliClient(runner);
+
+        DesktopStatusDto status = await client.SwitchDesktopAsync("Workspace Two");
+
+        Assert.True(status.Managed);
+        Assert.Equal("profile-2", status.LastObservedProfileId);
+    }
+
     private sealed class FakeCliProcessRunner : ICliProcessRunner
     {
         public required Func<IReadOnlyList<string>, CliProcessResult> ResultFactory { get; init; }

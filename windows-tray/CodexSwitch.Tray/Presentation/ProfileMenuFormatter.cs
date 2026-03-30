@@ -36,6 +36,29 @@ public static class ProfileMenuFormatter
         return $"Current: {activeProfile.DisplayName} | {FormatUsage(status)}";
     }
 
+    public static string FormatDesktopSummary(
+        DesktopStatusDto status,
+        IReadOnlyDictionary<string, ManagedProfileDto> profilesById)
+    {
+        if (!status.Managed)
+        {
+            return "Desktop sync: not started";
+        }
+
+        string running = status.Running ? "running" : "stopped";
+        string? profileDisplay = null;
+        if (!string.IsNullOrWhiteSpace(status.LastObservedProfileId) &&
+            profilesById.TryGetValue(status.LastObservedProfileId, out ManagedProfileDto? profile))
+        {
+            profileDisplay = profile.DisplayName;
+        }
+
+        profileDisplay ??= Normalize(status.LastObservedAccountId);
+        return profileDisplay is null
+            ? $"Desktop sync: {running}"
+            : $"Desktop sync: {running} | {profileDisplay}";
+    }
+
     private static string FormatUsage(ProfileStatusDto? status)
     {
         if (status is null)

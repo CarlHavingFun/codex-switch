@@ -102,28 +102,11 @@ export class ProfileManager {
     displayName?: string,
     mutation: ProfileMutationOptions = {},
   ): Promise<ManagedProfile> {
-    const authDocument = await readAuthDocumentFromHome(this.options.currentCodexHome);
-    const authSummary = summarizeAuthDocument(authDocument);
-    const authFingerprint = fingerprintAuthDocument(authDocument);
-    const profile = await this.ensureImportedProfile(
+    return this.importFromHome(
+      this.options.currentCodexHome,
       displayName,
-      authSummary,
-      mutation.workspaceLabel,
+      mutation,
     );
-    await this.prepareSkeleton(profile.codexHome);
-    await createProfileSkeleton(this.options.currentCodexHome, profile.codexHome);
-    await this.options.secretStore.save(profile.id, authDocument);
-
-    const saved = await this.options.registry.saveProfile({
-      ...profile,
-      authMode: authSummary.authMode,
-      accountId: authSummary.accountId,
-      workspaceObserved: authSummary.workspaceTitle ?? profile.workspaceObserved,
-      authFingerprint,
-    });
-    await this.options.registry.setActiveProfile(saved.id);
-
-    return (await this.options.registry.getActiveProfile()) ?? saved;
   }
 
   async login(
@@ -272,9 +255,13 @@ export class ProfileManager {
   }
 
   async syncCurrent(): Promise<SyncCurrentResult> {
+    return this.syncHome(this.options.currentCodexHome);
+  }
+
+  async syncHome(sourceCodexHome: string): Promise<SyncCurrentResult> {
     let authDocument: string;
     try {
-      authDocument = await readAuthDocumentFromHome(this.options.currentCodexHome);
+      authDocument = await readAuthDocumentFromHome(sourceCodexHome);
     } catch {
       return {
         action: "noop",
@@ -294,7 +281,7 @@ export class ProfileManager {
       (await this.options.registry.getProfileByAuthFingerprint(authFingerprint));
 
     if (!existing) {
-      const profile = await this.importCurrent(undefined);
+      const profile = await this.importFromHome(sourceCodexHome, undefined);
       return {
         action: "created",
         profile,
@@ -325,7 +312,7 @@ export class ProfileManager {
       };
     }
 
-    const profile = await this.importCurrent(existing.displayName, {
+    const profile = await this.importFromHome(sourceCodexHome, existing.displayName, {
       workspaceLabel: existing.workspaceLabel,
     });
 
@@ -336,6 +323,21 @@ export class ProfileManager {
       authFingerprint,
       reason: null,
     };
+  }
+
+  async getActiveProfile(): Promise<ManagedProfile | null> {
+    return this.options.registry.getActiveProfile();
+  }
+
+  async materializeProfile(
+    targetCodexHome: string,
+    profileName?: string,
+  ): Promise<ManagedProfile> {
+    const profile = await this.resolveProfile(profileName);
+    await createManagedProfileHome(targetCodexHome);
+    await createProfileSkeleton(profile.codexHome, targetCodexHome);
+    await hydrateAuthIntoHome(profile.id, targetCodexHome, this.options.secretStore);
+    return profile;
   }
 
   async list(): Promise<ManagedProfile[]> {
@@ -531,6 +533,35 @@ export class ProfileManager {
       authFingerprint,
     });
     return saved;
+  }
+
+  private async importFromHome(
+    sourceCodexHome: string,
+    displayName?: string,
+    mutation: ProfileMutationOptions = {},
+  ): Promise<ManagedProfile> {
+    const authDocument = await readAuthDocumentFromHome(sourceCodexHome);
+    const authSummary = summarizeAuthDocument(authDocument);
+    const authFingerprint = fingerprintAuthDocument(authDocument);
+    const profile = await this.ensureImportedProfile(
+      displayName,
+      authSummary,
+      mutation.workspaceLabel,
+    );
+    await this.prepareSkeleton(profile.codexHome);
+    await createProfileSkeleton(sourceCodexHome, profile.codexHome);
+    await this.options.secretStore.save(profile.id, authDocument);
+
+    const saved = await this.options.registry.saveProfile({
+      ...profile,
+      authMode: authSummary.authMode,
+      accountId: authSummary.accountId,
+      workspaceObserved: authSummary.workspaceTitle ?? profile.workspaceObserved,
+      authFingerprint,
+    });
+    await this.options.registry.setActiveProfile(saved.id);
+
+    return (await this.options.registry.getActiveProfile()) ?? saved;
   }
 }
 

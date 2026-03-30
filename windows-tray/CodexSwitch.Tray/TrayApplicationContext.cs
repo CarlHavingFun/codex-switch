@@ -25,6 +25,19 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private IReadOnlyList<ManagedProfileDto> _profiles = Array.Empty<ManagedProfileDto>();
     private IReadOnlyDictionary<string, ProfileStatusDto> _statusesByProfileId =
         new Dictionary<string, ProfileStatusDto>();
+    private DesktopStatusDto _desktopStatus = new(
+        false,
+        false,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null);
 
     public TrayApplicationContext(CodexSwitchCliClient cliClient)
     {
@@ -151,12 +164,15 @@ internal sealed class TrayApplicationContext : ApplicationContext
             IReadOnlyList<ProfileStatusDto> statuses = profiles.Count == 0
                 ? Array.Empty<ProfileStatusDto>()
                 : await _cliClient.GetAllStatusesAsync().ConfigureAwait(true);
+            DesktopStatusDto desktopStatus =
+                await _cliClient.GetDesktopStatusAsync().ConfigureAwait(true);
 
             _profiles = profiles
                 .OrderByDescending(profile => profile.IsActive)
                 .ThenBy(profile => profile.DisplayName, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
             _statusesByProfileId = statuses.ToDictionary(status => status.Profile.Id);
+            _desktopStatus = desktopStatus;
             RebuildMenu();
         }
         catch (Exception exception)
@@ -177,6 +193,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
         ManagedProfileDto? activeProfile = _profiles.FirstOrDefault(profile => profile.IsActive);
         _menu.Items.Add(new ToolStripMenuItem(
             ProfileMenuFormatter.FormatActiveSummary(activeProfile, _statusesByProfileId))
+        {
+            Enabled = false,
+        });
+        IReadOnlyDictionary<string, ManagedProfileDto> profilesById = _profiles.ToDictionary(profile => profile.Id);
+        _menu.Items.Add(new ToolStripMenuItem(
+            ProfileMenuFormatter.FormatDesktopSummary(_desktopStatus, profilesById))
         {
             Enabled = false,
         });
@@ -205,6 +227,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add(CreateAsyncMenuItem("Refresh now", RefreshSnapshotAsync));
+        _menu.Items.Add(CreateAsyncMenuItem("Launch Codex Desktop", LaunchDesktopAsync));
         _menu.Items.Add(CreateAsyncMenuItem("Add Profile", AddProfileAsync));
         _menu.Items.Add(CreateAsyncMenuItem("Import Current Login", ImportCurrentAsync));
 
@@ -240,7 +263,15 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private async Task UseProfileAsync(ManagedProfileDto profile)
     {
-        await _cliClient.UseProfileAsync(profile.DisplayName).ConfigureAwait(true);
+        if (_desktopStatus.Managed && _desktopStatus.Running)
+        {
+            _desktopStatus = await _cliClient.SwitchDesktopAsync(profile.DisplayName).ConfigureAwait(true);
+        }
+        else
+        {
+            await _cliClient.UseProfileAsync(profile.DisplayName).ConfigureAwait(true);
+        }
+
         await RefreshSnapshotAsync().ConfigureAwait(true);
     }
 
@@ -256,6 +287,14 @@ internal sealed class TrayApplicationContext : ApplicationContext
         ManagedProfileDto profile = await _cliClient.ImportCurrentAsync().ConfigureAwait(true);
         await RefreshSnapshotAsync().ConfigureAwait(true);
         ShowBalloon("codex-switch", $"Imported {profile.DisplayName}", ToolTipIcon.Info);
+    }
+
+    private async Task LaunchDesktopAsync()
+    {
+        DesktopStatusDto status = await _cliClient.LaunchDesktopAsync().ConfigureAwait(true);
+        _desktopStatus = status;
+        await RefreshSnapshotAsync().ConfigureAwait(true);
+        ShowBalloon("codex-switch", "Launched managed Codex Desktop", ToolTipIcon.Info);
     }
 
     private void OpenProfileFolder(ManagedProfileDto? activeProfile)

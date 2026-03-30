@@ -20,6 +20,9 @@ See [docs/login-flow.md](docs/login-flow.md) for a sanitized write-up of the obs
 - `sync-current` to import or switch to the current raw Codex login
 - `--json` output for tray/frontend integrations
 - `run` passthrough so Codex launches under the selected profile
+- `desktop launch` to start the official Codex desktop app under a managed session on Windows
+- `desktop status` to inspect the managed desktop sync state
+- `desktop switch` to restart the managed Codex desktop app on another saved profile
 - Optional shell hook so `codex` can transparently route through `codex-switch`
 - Windows tray app for one-click manual profile switching
 
@@ -43,6 +46,37 @@ npm link
 ```
 
 For the Windows tray app, `codex-switch.cmd` should be available in `PATH`. If you prefer not to `npm link`, set `CODEX_SWITCH_TRAY_COMMAND` to the command or full path you want the tray app to launch.
+
+## User Config
+
+Personal desktop settings such as proxy information, the Codex Desktop path, and the preferred working directory live in a local JSON config file:
+
+- default path: `~/.codex-switch/config.json`
+- if `CODEX_SWITCH_HOME` is set: `<CODEX_SWITCH_HOME>/config.json`
+
+Example:
+
+```json
+{
+  "codex": {
+    "command": "codex",
+    "commandArgs": []
+  },
+  "desktop": {
+    "proxyUrl": "http://127.0.0.1:7890",
+    "clientPath": "",
+    "workingDirectory": "D:\\001_CODEX",
+    "clientArgs": [],
+    "monitorPollIntervalMs": 60000
+  }
+}
+```
+
+Notes:
+
+- this file is machine-local and should not be committed
+- matching environment variables still override config values
+- `monitorPollIntervalMs` controls how often the managed desktop monitor checks for workspace/profile changes
 
 ## Basic Usage
 
@@ -127,14 +161,40 @@ codex-switch list --json
 codex-switch status --all --json
 codex-switch use team-a --json
 codex-switch sync-current --json
+codex-switch desktop status --json
+codex-switch desktop switch team-a --json
 ```
+
+### Managed Codex Desktop Launch
+
+On Windows, `codex-switch` can also launch the official Codex desktop app through a managed session:
+
+```powershell
+codex-switch desktop launch
+codex-switch desktop status
+codex-switch desktop switch team-a
+```
+
+This mode is the supported way to keep `codex-switch` and the official Codex desktop app aligned:
+
+- `codex-switch` seeds the desktop session from the current active managed profile
+- the desktop app runs with a dedicated managed `CODEX_HOME`
+- a background monitor watches that managed desktop session for auth changes
+- when the desktop app switches to another workspace, `codex-switch` imports or reuses the matching `chatgptAccountId` profile and marks it active
+- the managed desktop monitor checks for changes every 60 seconds by default
+- `desktop switch <profile>` restarts the managed desktop app onto another saved profile
+
+Current v1 boundary:
+
+- automatic desktop sync is only guaranteed for Codex desktop instances launched through `codex-switch desktop launch`
+- already-running desktop instances and VS Code / Cursor extensions are not auto-synchronized
 
 ### Tray App Quick Start
 
 1. Run `npm link` once so `codex-switch.cmd` is in `PATH`.
 2. Start `windows-tray/publish/win-x64/CodexSwitch.Tray.exe`.
-3. In the tray menu, use `Add Profile` or `Import Current Login`.
-4. Click a profile to make it active.
+3. In the tray menu, use `Launch Codex Desktop`, `Add Profile`, or `Import Current Login`.
+4. If managed desktop sync is running, clicking a profile restarts the desktop app on that profile. Otherwise it just updates the active profile for future launches.
 5. Launch future managed Codex sessions with `codex-switch run`, or use the PowerShell shell hook so plain `codex` follows the active profile.
 
 ## Windows Tray App
@@ -147,6 +207,9 @@ The tray app:
 - displays best-effort workspace, remaining usage, and reset time
 - lets you click a profile to make it active
 - supports `Add Profile` and `Import Current Login`
+- can launch the official Codex desktop app through `Launch Codex Desktop`
+- shows whether desktop auto-sync is connected
+- restarts the managed desktop app onto a selected profile when you click a profile while desktop sync is running
 - watches the default `~/.codex/auth.json` and syncs newly detected external logins
 
 Build and test it with:
@@ -169,6 +232,9 @@ powershell -ExecutionPolicy Bypass -File scripts/publish-windows-tray.ps1
 - `codex-switch list`
 - `codex-switch status [--all|--profile <name>]`
 - `codex-switch sync-current`
+- `codex-switch desktop launch`
+- `codex-switch desktop status`
+- `codex-switch desktop switch <profile>`
 - `codex-switch use <profile>`
 - `codex-switch run [--profile <name>] -- <codex args...>`
 - `codex-switch doctor`
@@ -179,7 +245,7 @@ powershell -ExecutionPolicy Bypass -File scripts/publish-windows-tray.ps1
 - Sensitive authentication material is stored in the system credential store, not committed to the repository.
 - Managed profile homes keep non-sensitive Codex state and sanitized skeleton files only.
 - Workspace detection is best-effort and intended for display, not as a stable unique identifier.
-- The tray app and CLI switch a managed global active profile for future launches. They do not take over already-running terminals, the official Codex desktop app, or the VS Code Codex extension.
+- The tray app and CLI switch a managed global active profile for future launches. Desktop auto-sync only applies to official Codex desktop instances launched through `codex-switch desktop launch`; already-running desktop instances and the VS Code Codex extension are outside this v1 guarantee.
 
 ## FAQ
 
