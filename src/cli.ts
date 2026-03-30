@@ -206,6 +206,39 @@ program
     console.log(renderShellHook(shell));
   });
 
+const workspaceProgram = program
+  .command("workspace")
+  .description("Manage manual workspace labels for profiles.");
+
+workspaceProgram
+  .command("setname")
+  .argument("<name>", "manual workspace name to display")
+  .option("--profile <profile>", "target a specific profile instead of the active one")
+  .option("--json", "print structured JSON")
+  .action(async (name: string, options: { profile?: string; json?: boolean }) => {
+    const updated = await runtime.manager.setWorkspaceLabel(options.profile, name);
+    if (options.json) {
+      printJson(updated);
+      return;
+    }
+    console.log(
+      `Set manual workspace name for ${updated.displayName} to ${formatWorkspaceDisplay(updated)}.`,
+    );
+  });
+
+workspaceProgram
+  .command("clear")
+  .option("--profile <profile>", "target a specific profile instead of the active one")
+  .option("--json", "print structured JSON")
+  .action(async (options: { profile?: string; json?: boolean }) => {
+    const updated = await runtime.manager.clearWorkspaceLabel(options.profile);
+    if (options.json) {
+      printJson(updated);
+      return;
+    }
+    console.log(`Cleared manual workspace name for ${updated.displayName}.`);
+  });
+
 await program.parseAsync(process.argv);
 
 function printStatus(status: ProfileStatus): void {
@@ -243,11 +276,11 @@ function formatWorkspaceDisplay(profile: ProfileStatus["profile"]): string {
   const workspaceLabel = profile.workspaceLabel?.trim();
   const workspaceObserved = profile.workspaceObserved?.trim();
 
-  if (workspaceLabel && workspaceObserved && workspaceLabel !== workspaceObserved) {
-    return `${workspaceLabel} / ${workspaceObserved}`;
+  if (workspaceLabel) {
+    return workspaceLabel;
   }
 
-  return workspaceLabel ?? workspaceObserved ?? "unlabeled";
+  return workspaceObserved ?? "unlabeled";
 }
 
 function printJson(payload: unknown): void {

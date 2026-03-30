@@ -9,14 +9,12 @@ public static class ProfileMenuFormatter
         string? workspaceLabel = Normalize(profile.WorkspaceLabel);
         string? workspaceObserved = Normalize(profile.WorkspaceObserved);
 
-        if (!string.IsNullOrWhiteSpace(workspaceLabel) &&
-            !string.IsNullOrWhiteSpace(workspaceObserved) &&
-            !string.Equals(workspaceLabel, workspaceObserved, StringComparison.Ordinal))
+        if (!string.IsNullOrWhiteSpace(workspaceLabel))
         {
-            return $"{workspaceLabel} / {workspaceObserved}";
+            return workspaceLabel;
         }
 
-        return workspaceLabel ?? workspaceObserved ?? "unlabeled";
+        return workspaceObserved ?? "unlabeled";
     }
 
     public static string FormatProfileLabel(ManagedProfileDto profile, ProfileStatusDto? status)

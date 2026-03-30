@@ -246,6 +246,31 @@ export class ProfileManager {
     return (await this.options.registry.getActiveProfile()) ?? profile;
   }
 
+  async setWorkspaceLabel(
+    profileName: string | undefined,
+    workspaceLabel: string,
+  ): Promise<ManagedProfile> {
+    const profile = await this.resolveProfile(profileName);
+    const saved = await this.options.registry.saveProfile({
+      ...profile,
+      workspaceLabel: workspaceLabel.trim(),
+    });
+    return profile.isActive
+      ? (await this.options.registry.getActiveProfile()) ?? saved
+      : saved;
+  }
+
+  async clearWorkspaceLabel(profileName?: string): Promise<ManagedProfile> {
+    const profile = await this.resolveProfile(profileName);
+    const saved = await this.options.registry.saveProfile({
+      ...profile,
+      workspaceLabel: null,
+    });
+    return profile.isActive
+      ? (await this.options.registry.getActiveProfile()) ?? saved
+      : saved;
+  }
+
   async syncCurrent(): Promise<SyncCurrentResult> {
     let authDocument: string;
     try {

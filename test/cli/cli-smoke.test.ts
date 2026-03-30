@@ -339,4 +339,40 @@ describe("codex-switch CLI", () => {
     },
     20_000,
   );
+
+  test(
+    "sets and clears a manual workspace name for the active profile",
+    async () => {
+      const rootDir = await mkdtemp(join(tmpdir(), "codex-switch-cli-"));
+      const currentCodexHome = join(rootDir, "current");
+      const managedHome = join(rootDir, "managed");
+      await seedCurrentCodexHome(currentCodexHome);
+
+      const env = {
+        ...process.env,
+        CODEX_SWITCH_HOME: managedHome,
+        CODEX_SWITCH_CURRENT_CODEX_HOME: currentCodexHome,
+        CODEX_SWITCH_CODEX_COMMAND: process.execPath,
+        CODEX_SWITCH_CODEX_ARGS_JSON: JSON.stringify([fakeCodexScript]),
+      };
+
+      await runCli(["import-current"], env);
+      const setNamed = await runCli(
+        ["workspace", "setname", "Leah Murray's Workspace"],
+        env,
+      );
+      const listed = await runCli(["list"], env);
+      const status = await runCli(["status", "--profile", "fixture@example.com__acct_cli"], env);
+      const cleared = await runCli(["workspace", "clear"], env);
+      const listedAfterClear = await runCli(["list"], env);
+
+      expect(setNamed.stdout).toContain("Leah Murray's Workspace");
+      expect(listed.stdout).toContain("Leah Murray's Workspace");
+      expect(listed.stdout).not.toContain("Leah Murray's Workspace / Workspace Prime");
+      expect(status.stdout).toContain("Workspace: Leah Murray's Workspace");
+      expect(cleared.stdout).toContain("Cleared manual workspace name");
+      expect(listedAfterClear.stdout).toContain("Workspace Prime");
+    },
+    20_000,
+  );
 });

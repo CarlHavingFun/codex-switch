@@ -6,7 +6,7 @@ namespace CodexSwitch.Tray.Tests;
 public sealed class ProfileMenuFormatterTests
 {
     [Fact]
-    public void FormatProfileLabel_PrefersCombinedWorkspaceAndCreditsSummary()
+    public void FormatProfileLabel_PrefersManualWorkspaceNameAndCreditsSummary()
     {
         ManagedProfileDto profile = CreateProfile();
         ProfileStatusDto status = CreateStatus(profile, new UsageSummaryDto(
@@ -23,7 +23,8 @@ public sealed class ProfileMenuFormatterTests
         string label = ProfileMenuFormatter.FormatProfileLabel(profile, status);
 
         Assert.Contains("workspace-a [chatgpt]", label);
-        Assert.Contains("Manual Team / Observed Team", label);
+        Assert.Contains("Manual Team", label);
+        Assert.DoesNotContain("Manual Team / Observed Team", label);
         Assert.Contains("credits 42.00", label);
         Assert.Contains(
             DateTimeOffset.FromUnixTimeSeconds(1_730_947_200).ToLocalTime().ToString("MM-dd HH:mm"),

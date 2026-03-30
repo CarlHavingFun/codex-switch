@@ -802,4 +802,32 @@ describe("ProfileManager", () => {
       isActive: true,
     });
   });
+
+  test("allows setting and clearing a manual workspace label for the active profile", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "codex-switch-manager-"));
+    const currentCodexHome = join(rootDir, "current");
+    const registry = new ProfileRegistry(rootDir);
+    const secretStore = new InMemorySecretStore();
+    const manager = new ProfileManager({
+      registry,
+      secretStore,
+      codexClient: new FakeCodexClient(),
+      rootDir,
+      currentCodexHome,
+    });
+
+    await seedCurrentCodexHome(currentCodexHome, "acct_named", {
+      email: "named@example.com",
+      organizations: [{ id: "org-named", title: "Observed Workspace", is_default: true }],
+    });
+    await manager.importCurrent("named");
+
+    const labeled = await manager.setWorkspaceLabel(undefined, "Leah Murray's Workspace");
+    const cleared = await manager.clearWorkspaceLabel(undefined);
+
+    expect(labeled.workspaceLabel).toBe("Leah Murray's Workspace");
+    expect(labeled.workspaceObserved).toBe("Observed Workspace");
+    expect(cleared.workspaceLabel).toBeNull();
+    expect(cleared.workspaceObserved).toBe("Observed Workspace");
+  });
 });
