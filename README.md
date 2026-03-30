@@ -92,9 +92,9 @@ codex-switch login --isolated-browser
 codex-switch login --native-browser
 ```
 
-On Windows, plain `codex-switch login` now defaults to the isolated-browser flow. `codex-switch` opens the ChatGPT OAuth flow in an isolated Chrome/Edge user-data directory, then completes the localhost callback and `/oauth/token` exchange itself before storing the resulting `auth.json` in the managed profile. This keeps the browser portion of the official flow while avoiding some broken session state in the everyday browser profile and the upstream token-exchange transport issue we observed in practice.
+On Windows, plain `codex-switch login` now defaults to the isolated-browser flow. `codex-switch` starts the official `codex app-server account/login/start` flow inside the managed profile, opens the returned ChatGPT auth URL in an isolated Chrome/Edge user-data directory, and waits for the official `account/login/completed` notification before using the resulting `auth.json`. This keeps the upstream login context intact while still reducing broken session state from the everyday browser profile.
 
-Use `--native-browser` if you explicitly want the old behavior and let the upstream `codex login` command control both the browser launch and token exchange. Use `--isolated-browser` if you want to force the self-managed isolated flow explicitly in scripts or cross-check behavior.
+Use `--native-browser` if you explicitly want the old behavior and let the upstream `codex login` command control both the browser launch and token exchange. Use `--isolated-browser` if you want to force the isolated app-server-backed flow explicitly in scripts or cross-check behavior.
 
 View and switch profiles:
 
@@ -200,6 +200,14 @@ codex-switch login personal
 ```
 
 The underlying profile still keeps the account/workspace metadata internally even if the display name is friendlier.
+
+### Can the same email account produce multiple managed profiles?
+
+Yes. `codex-switch` dedupes by `chatgpt_account_id`, not just by email.
+
+In real login captures, two different workspace selections under the same email account produced two different `chatgpt_account_id` values. That means the same ChatGPT email can still map to multiple managed profiles when different workspace/account contexts are selected during login.
+
+This is also why `organizations[].title` is treated as best-effort display data only. In the observed login flow, that title was not always enough to distinguish the actual workspace context, while `chatgpt_account_id` was.
 
 ## Development
 

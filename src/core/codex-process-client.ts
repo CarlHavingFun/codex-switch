@@ -12,7 +12,11 @@ import type {
   CodexRateLimitSnapshot,
   CodexRunOptions,
 } from "./codex-client.js";
-import { performOauthBrowserLogin } from "./oauth-browser-login.js";
+import { launchLoginBrowser } from "./browser-launcher.js";
+import {
+  getAuthUrlRedirectPort,
+  startIpv6LoopbackBridge,
+} from "./ipv6-loopback-bridge.js";
 
 const accountSnapshotSchema = z.object({
   account: z
@@ -62,6 +66,18 @@ const rateLimitSnapshotSchema = z.object({
   rateLimitsByLimitId: z.record(z.string(), rateLimitEntrySchema).nullable(),
 });
 
+const loginStartResultSchema = z.object({
+  type: z.literal("chatgpt"),
+  loginId: z.string(),
+  authUrl: z.string(),
+});
+
+const loginCompletedParamsSchema = z.object({
+  loginId: z.string().nullable().optional(),
+  success: z.boolean(),
+  error: z.string().nullable().optional(),
+});
+
 interface CodexProcessClientOptions {
   command?: string;
   commandArgs?: string[];
@@ -72,6 +88,8 @@ interface CodexProcessClientOptions {
 interface JsonRpcResponse {
   jsonrpc: "2.0";
   id?: number;
+  method?: string;
+  params?: unknown;
   result?: unknown;
   error?: {
     code: number;
@@ -335,14 +353,206 @@ export class CodexProcessClient implements CodexClient {
   }
 
   private async loginWithIsolatedBrowser(profileHome: string): Promise<void> {
-    await performOauthBrowserLogin({
-      profileHome,
-      env: this.baseEnv,
-      browserStrategy: "isolated",
-      timeoutMs: Math.max(this.timeoutMs, 30_000),
+    const child = execa(
+      this.command,
+      [...this.commandArgs, "app-server", "--listen", "stdio://"],
+      {
+        cleanup: false,
+        env: {
+          ...this.baseEnv,
+          CODEX_HOME: profileHome,
+        },
+        reject: false,
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    ) as unknown as CodexAppServerProcess;
+
+    const messages: JsonRpcResponse[] = [];
+    const stderrChunks: string[] = [];
+    let stdoutBuffer = "";
+    let browserHandle: { cleanup(): Promise<void> } | null = null;
+    let loopbackBridge: { close(): Promise<void> } | null = null;
+    let childClosed = false;
+    let closeCode: number | null = null;
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdoutBuffer += chunk;
+      const lines = stdoutBuffer.split(/\r?\n/);
+      stdoutBuffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        if (!line.trim()) {
+          continue;
+        }
+
+        try {
+          messages.push(JSON.parse(line) as JsonRpcResponse);
+        } catch {
+          stderrChunks.push(`UNPARSEABLE_STDOUT: ${line}`);
+        }
+      }
     });
+
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderrChunks.push(chunk);
+    });
+
+    child.on("close", (code) => {
+      childClosed = true;
+      closeCode = code;
+    });
+
+    try {
+      this.writeJsonRpc(child, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          clientInfo: {
+            name: "codex-switch",
+            title: "codex-switch",
+            version: "0.1.0",
+          },
+          capabilities: {
+            experimentalApi: true,
+            optOutNotificationMethods: [],
+          },
+        },
+      });
+
+      await this.waitForMessage(
+        messages,
+        () => childClosed,
+        () => closeCode,
+        stderrChunks,
+        (message) => message.id === 1 && message.error === undefined,
+        "Timed out waiting for app-server initialize response",
+      );
+
+      this.writeJsonRpc(child, {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "account/login/start",
+        params: {
+          type: "chatgpt",
+        },
+      });
+
+      const loginStartMessage = await this.waitForMessage(
+        messages,
+        () => childClosed,
+        () => closeCode,
+        stderrChunks,
+        (message) => message.id === 2 && message.result !== undefined,
+        "Timed out waiting for app-server login start response",
+      );
+      if (loginStartMessage.error) {
+        throw new Error(`app-server account/login/start failed: ${loginStartMessage.error.message}`);
+      }
+
+      const loginStart = loginStartResultSchema.parse(loginStartMessage.result);
+      const callbackPort = getAuthUrlRedirectPort(loginStart.authUrl);
+      if (callbackPort) {
+        loopbackBridge = await startIpv6LoopbackBridge(callbackPort);
+      }
+      browserHandle = await launchLoginBrowser(loginStart.authUrl, {
+        strategy: "isolated",
+        env: this.baseEnv,
+      });
+
+      const completedMessage = await this.waitForMessage(
+        messages,
+        () => childClosed,
+        () => closeCode,
+        stderrChunks,
+        (message) =>
+          message.method === "account/login/completed" &&
+          typeof message.params === "object" &&
+          message.params !== null &&
+          (message.params as { loginId?: string | null }).loginId === loginStart.loginId,
+        "Timed out waiting for app-server login completion notification",
+        Math.max(this.timeoutMs, 30_000) * 4,
+      );
+      const completed = loginCompletedParamsSchema.parse(completedMessage.params);
+      if (!completed.success) {
+        throw new Error(
+          completed.error?.trim() || "Sign-in could not be completed.",
+        );
+      }
+
+      await this.waitForAuthDocument(join(profileHome, "auth.json"));
+    } finally {
+      if (loopbackBridge) {
+        await loopbackBridge.close();
+      }
+      if (browserHandle) {
+        await browserHandle.cleanup();
+      }
+      try {
+        child.stdin.end();
+      } catch {
+        // Best-effort cleanup only.
+      }
+      child.kill();
+    }
 
     const authPath = join(profileHome, "auth.json");
     await stat(authPath);
+  }
+
+  private writeJsonRpc(
+    child: CodexAppServerProcess,
+    payload: Record<string, unknown>,
+  ): void {
+    child.stdin.write(`${JSON.stringify(payload)}\n`);
+  }
+
+  private async waitForMessage(
+    messages: JsonRpcResponse[],
+    childClosed: () => boolean,
+    closeCode: () => number | null,
+    stderrChunks: string[],
+    predicate: (message: JsonRpcResponse) => boolean,
+    timeoutMessage: string,
+    timeoutMs = this.timeoutMs,
+  ): Promise<JsonRpcResponse> {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const matched = messages.find(predicate);
+      if (matched) {
+        return matched;
+      }
+
+      if (childClosed()) {
+        throw new Error(
+          `app-server exited before completing login flow (code ${closeCode() ?? "unknown"}): ${stderrChunks.join("")}`,
+        );
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    throw new Error(timeoutMessage);
+  }
+
+  private async waitForAuthDocument(authPath: string): Promise<void> {
+    const startedAt = Date.now();
+    const timeoutMs = Math.max(this.timeoutMs, 30_000);
+
+    while (Date.now() - startedAt < timeoutMs) {
+      try {
+        await stat(authPath);
+        return;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+
+    throw new Error(`Timed out waiting for auth document at ${authPath}`);
   }
 }

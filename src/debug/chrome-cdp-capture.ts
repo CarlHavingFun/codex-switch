@@ -223,8 +223,10 @@ export class ChromeCdpCaptureSession {
 
     if (method === "Target.attachedToTarget") {
       const targetInfo = params.targetInfo as { type?: string } | undefined;
+      const attachedSessionId =
+        typeof params.sessionId === "string" ? params.sessionId : null;
       if (targetInfo?.type === "page") {
-        await this.enablePageCapture(sessionId);
+        await this.enablePageCapture(attachedSessionId);
       }
       return;
     }

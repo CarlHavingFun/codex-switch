@@ -3,7 +3,6 @@ import { execa } from "execa";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "vitest";
-import { startOAuthTestServer } from "../helpers/oauth-test-server.js";
 
 const cliEntrypoint = join(process.cwd(), "src", "cli.ts");
 const fakeCodexScript = join(process.cwd(), "test", "fixtures", "fake-codex.mjs");
@@ -204,7 +203,7 @@ describe("codex-switch CLI", () => {
       const currentCodexHome = join(rootDir, "current");
       const managedHome = join(rootDir, "managed");
       const browserCapturePath = join(rootDir, "browser-default.json");
-      const oauthServer = await startOAuthTestServer();
+      const loginSignalPath = join(rootDir, "default-login-signal.txt");
       await mkdir(currentCodexHome, { recursive: true });
       await writeFile(join(currentCodexHome, "config.toml"), 'model = "gpt-5"', "utf8");
 
@@ -214,50 +213,47 @@ describe("codex-switch CLI", () => {
         CODEX_SWITCH_CURRENT_CODEX_HOME: currentCodexHome,
         CODEX_SWITCH_CODEX_COMMAND: process.execPath,
         CODEX_SWITCH_CODEX_ARGS_JSON: JSON.stringify([fakeCodexScript]),
-        CODEX_SWITCH_AUTH_BASE_URL: oauthServer.baseUrl,
         CODEX_SWITCH_BROWSER_COMMAND: process.execPath,
-        CODEX_SWITCH_BROWSER_ARGS_JSON: JSON.stringify([fakeCodexScript, "complete-login", "{url}"]),
+        CODEX_SWITCH_BROWSER_ARGS_JSON: JSON.stringify([fakeCodexScript, "open-browser", "{url}"]),
         FAKE_BROWSER_CAPTURE_PATH: browserCapturePath,
+        FAKE_CODEX_ISOLATED_LOGIN_SIGNAL_PATH: loginSignalPath,
       };
 
-      try {
-        const loggedIn = JSON.parse((await runCli(["login", "--json"], env)).stdout) as {
-          displayName: string;
-          workspaceObserved: string | null;
-          authFingerprint: string;
-        };
-        const listed = await runCli(["list"], env);
-        const browserCapture = JSON.parse(await readFile(browserCapturePath, "utf8")) as {
-          url: string;
-        };
+      const loggedIn = JSON.parse((await runCli(["login", "--json"], env)).stdout) as {
+        displayName: string;
+        workspaceObserved: string | null;
+        authFingerprint: string;
+      };
+      const listed = await runCli(["list"], env);
+      const browserCapture = JSON.parse(await readFile(browserCapturePath, "utf8")) as {
+        url: string;
+      };
 
-        expect(loggedIn).toMatchObject({
-          displayName: "fixture@example.com__acct_fixture_login",
-          workspaceObserved: "Fixture Workspace",
-        });
-        expect(loggedIn.authFingerprint).toMatch(/^[a-f0-9]{64}$/);
-        expect(listed.stdout).toContain("* fixture@example.com__acct_fixture_login");
-        expect(listed.stdout).toContain("Fixture Workspace");
-        expect(browserCapture.url).toContain(`${oauthServer.baseUrl}/oauth/authorize`);
-        expect(
-          JSON.parse(
-            await readFile(join(managedHome, "profiles.json"), "utf8"),
-          ) as {
-            activeProfileId: string;
-            profiles: Array<{ displayName: string; authFingerprint: string | null }>;
+      expect(loggedIn).toMatchObject({
+        displayName: "fixture@example.com__acct_fixture_login",
+        workspaceObserved: "Fixture Workspace",
+      });
+      expect(loggedIn.authFingerprint).toMatch(/^[a-f0-9]{64}$/);
+      expect(listed.stdout).toContain("* fixture@example.com__acct_fixture_login");
+      expect(listed.stdout).toContain("Fixture Workspace");
+      expect(browserCapture.url).toContain("https://auth.openai.com/oauth/authorize");
+      expect(browserCapture.url).toContain("state=fixture-state");
+      expect(
+        JSON.parse(
+          await readFile(join(managedHome, "profiles.json"), "utf8"),
+        ) as {
+          activeProfileId: string;
+          profiles: Array<{ displayName: string; authFingerprint: string | null }>;
+        },
+      ).toMatchObject({
+        activeProfileId: "fixture-example-com-acct-fixture-login",
+        profiles: [
+          {
+            displayName: "fixture@example.com__acct_fixture_login",
+            authFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
           },
-        ).toMatchObject({
-          activeProfileId: "fixture-example-com-acct-fixture-login",
-          profiles: [
-            {
-              displayName: "fixture@example.com__acct_fixture_login",
-              authFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
-            },
-          ],
-        });
-      } finally {
-        await oauthServer.close();
-      }
+        ],
+      });
     },
     20_000,
   );
@@ -301,7 +297,7 @@ describe("codex-switch CLI", () => {
       const currentCodexHome = join(rootDir, "current");
       const managedHome = join(rootDir, "managed");
       const browserCapturePath = join(rootDir, "browser.json");
-      const oauthServer = await startOAuthTestServer();
+      const loginSignalPath = join(rootDir, "isolated-login-signal.txt");
       await mkdir(currentCodexHome, { recursive: true });
       await writeFile(join(currentCodexHome, "config.toml"), 'model = "gpt-5"', "utf8");
 
@@ -311,31 +307,28 @@ describe("codex-switch CLI", () => {
         CODEX_SWITCH_CURRENT_CODEX_HOME: currentCodexHome,
         CODEX_SWITCH_CODEX_COMMAND: process.execPath,
         CODEX_SWITCH_CODEX_ARGS_JSON: JSON.stringify([fakeCodexScript]),
-        CODEX_SWITCH_AUTH_BASE_URL: oauthServer.baseUrl,
         CODEX_SWITCH_BROWSER_COMMAND: process.execPath,
-        CODEX_SWITCH_BROWSER_ARGS_JSON: JSON.stringify([fakeCodexScript, "complete-login", "{url}"]),
+        CODEX_SWITCH_BROWSER_ARGS_JSON: JSON.stringify([fakeCodexScript, "open-browser", "{url}"]),
         FAKE_BROWSER_CAPTURE_PATH: browserCapturePath,
+        FAKE_CODEX_ISOLATED_LOGIN_SIGNAL_PATH: loginSignalPath,
       };
 
-      try {
-        const loggedIn = JSON.parse(
-          (await runCli(["login", "--isolated-browser", "--json"], env)).stdout,
-        ) as {
-          displayName: string;
-          workspaceObserved: string | null;
-        };
-        const browserCapture = JSON.parse(await readFile(browserCapturePath, "utf8")) as {
-          url: string;
-        };
+      const loggedIn = JSON.parse(
+        (await runCli(["login", "--isolated-browser", "--json"], env)).stdout,
+      ) as {
+        displayName: string;
+        workspaceObserved: string | null;
+      };
+      const browserCapture = JSON.parse(await readFile(browserCapturePath, "utf8")) as {
+        url: string;
+      };
 
-        expect(loggedIn).toMatchObject({
-          displayName: "fixture@example.com__acct_fixture_login",
-          workspaceObserved: "Fixture Workspace",
-        });
-        expect(browserCapture.url).toContain(`${oauthServer.baseUrl}/oauth/authorize`);
-      } finally {
-        await oauthServer.close();
-      }
+      expect(loggedIn).toMatchObject({
+        displayName: "fixture@example.com__acct_fixture_login",
+        workspaceObserved: "Fixture Workspace",
+      });
+      expect(browserCapture.url).toContain("https://auth.openai.com/oauth/authorize");
+      expect(browserCapture.url).toContain("state=fixture-state");
     },
     20_000,
   );

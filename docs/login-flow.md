@@ -159,9 +159,16 @@ Observed conclusions:
 - JWT claims may contain `organizations[].title`, but that value is not guaranteed to match the user-facing workspace label shown by every Codex client surface.
 - The existence of `/api/accounts/workspace/select` strongly suggests that some workspace/account context is selected in the browser flow before consent completes.
 
+Additional findings from two successful logins under the same email account:
+
+- Two different workspace selections produced two different `chatgpt_account_id` values.
+- In the successful browser capture that included `POST /api/accounts/workspace/select`, the submitted `workspace_id` exactly matched the final JWT `chatgpt_account_id`.
+- In both successful runs, `organizations[].title` still appeared as `Personal`, so it was not sufficient to distinguish the two workspace contexts by itself.
+
 Current best inference:
 
 - A user-facing workspace label shown by the desktop client is more likely to come from browser/private auth UI state around workspace selection than from the public CLI protocol.
+- For profile isolation and dedupe, `chatgpt_account_id` is the strongest workspace-distinguishing identifier currently visible to `codex-switch`.
 
 ## Why Isolated-Browser Login Helps
 

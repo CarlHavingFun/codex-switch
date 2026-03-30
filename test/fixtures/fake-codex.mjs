@@ -109,6 +109,7 @@ async function main() {
       join(codexHome, "auth.json"),
       JSON.stringify({
         auth_mode: "chatgpt",
+        OPENAI_API_KEY: null,
         tokens: {
           account_id: "acct_fixture_login",
           access_token: "access",
@@ -268,6 +269,7 @@ async function main() {
               join(codexHome, "auth.json"),
               JSON.stringify({
                 auth_mode: "chatgpt",
+                OPENAI_API_KEY: null,
                 tokens: {
                   account_id: "acct_fixture_login",
                   access_token: "access",
