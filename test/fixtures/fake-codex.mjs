@@ -138,6 +138,8 @@ async function main() {
       process.exit(3);
     }
 
+    let initialized = process.env.FAKE_CODEX_REQUIRE_INIT_ACK !== "1";
+
     const rl = createInterface({
       input: process.stdin,
       crlfDelay: Infinity,
@@ -146,15 +148,29 @@ async function main() {
     rl.on("line", (line) => {
       const message = JSON.parse(line);
       if (message.method === "initialize") {
-        process.stdout.write(
-          `${JSON.stringify({
-            jsonrpc: "2.0",
-            id: message.id,
-            result: {
-              ok: true,
-            },
-          })}\n`,
-        );
+        const respond = () => {
+          initialized = true;
+          process.stdout.write(
+            `${JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                ok: true,
+              },
+            })}\n`,
+          );
+        };
+
+        if (process.env.FAKE_CODEX_REQUIRE_INIT_ACK === "1") {
+          setTimeout(respond, 25);
+          return;
+        }
+
+        respond();
+        return;
+      }
+
+      if (!initialized) {
         return;
       }
 

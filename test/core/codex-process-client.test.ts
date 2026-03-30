@@ -113,6 +113,26 @@ describe("CodexProcessClient", () => {
     });
   });
 
+  test("waits for initialize before sending app-server RPC methods", async () => {
+    const client = new CodexProcessClient({
+      command: process.execPath,
+      commandArgs: [fakeCodexScript],
+      env: {
+        ...process.env,
+        FAKE_CODEX_REQUIRE_INIT_ACK: "1",
+      },
+    });
+
+    await expect(client.getAccountSnapshot("D:/profile-home")).resolves.toEqual({
+      account: {
+        type: "chatgpt",
+        email: "fixture@example.com",
+        planType: "team",
+      },
+      requiresOpenaiAuth: false,
+    });
+  });
+
   test("runs Codex with the caller-provided environment and returns the exit code", async () => {
     const captureDir = await mkdtemp(join(tmpdir(), "codex-switch-client-"));
     const capturePath = join(captureDir, "run.json");

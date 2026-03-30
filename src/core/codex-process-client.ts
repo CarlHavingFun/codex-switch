@@ -213,10 +213,36 @@ export class CodexProcessClient implements CodexClient {
       const responses = new Map<number, JsonRpcResponse>();
       const stderrChunks: string[] = [];
       let stdoutBuffer = "";
+      let methodSent = false;
+      let settled = false;
+
+      const settle = (
+        action: "resolve" | "reject",
+        value: unknown,
+      ): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        try {
+          child.stdin.end();
+        } catch {
+          // Best-effort cleanup only.
+        }
+        child.kill();
+        if (action === "resolve") {
+          resolve(value);
+          return;
+        }
+        reject(value);
+      };
 
       const timeout = setTimeout(() => {
-        child.kill();
-        reject(new Error(`Timed out waiting for ${method} app-server response`));
+        settle(
+          "reject",
+          new Error(`Timed out waiting for ${method} app-server response`),
+        );
       }, this.timeoutMs);
 
       child.stdout.setEncoding("utf8");
@@ -233,6 +259,18 @@ export class CodexProcessClient implements CodexClient {
           const response = JSON.parse(line) as JsonRpcResponse;
           if (typeof response.id === "number") {
             responses.set(response.id, response);
+            if (response.id === 1 && !methodSent) {
+              methodSent = true;
+              child.stdin.write(
+                `${JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: 2,
+                  method,
+                  params,
+                })}\n`,
+              );
+              child.stdin.end();
+            }
           }
         }
       });
@@ -243,16 +281,18 @@ export class CodexProcessClient implements CodexClient {
       });
 
       child.on("error", (error) => {
-        clearTimeout(timeout);
-        reject(error);
+        settle("reject", error);
       });
 
       child.on("close", (code) => {
-        clearTimeout(timeout);
+        if (settled) {
+          return;
+        }
 
         const methodResponse = responses.get(2);
         if (methodResponse?.error) {
-          reject(
+          settle(
+            "reject",
             new Error(
               `app-server ${method} failed: ${methodResponse.error.message}`,
             ),
@@ -261,11 +301,12 @@ export class CodexProcessClient implements CodexClient {
         }
 
         if (methodResponse?.result !== undefined) {
-          resolve(methodResponse.result);
+          settle("resolve", methodResponse.result);
           return;
         }
 
-        reject(
+        settle(
+          "reject",
           new Error(
             `app-server ${method} exited with code ${code ?? "unknown"}: ${stderrChunks.join("")}`,
           ),
@@ -290,15 +331,6 @@ export class CodexProcessClient implements CodexClient {
           },
         })}\n`,
       );
-      child.stdin.write(
-        `${JSON.stringify({
-          jsonrpc: "2.0",
-          id: 2,
-          method,
-          params,
-        })}\n`,
-      );
-      child.stdin.end();
     });
   }
 

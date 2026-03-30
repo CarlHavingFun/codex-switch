@@ -218,6 +218,9 @@ function printStatus(status: ProfileStatus): void {
   console.log(`Plan: ${status.profile.planType ?? "unknown"}`);
   console.log(`Workspace: ${formatWorkspaceDisplay(status.profile)}`);
   console.log(`Login status: ${loginStatus}`);
+  console.log(
+    `Requires OpenAI auth: ${status.requiresOpenaiAuth === null ? "unknown" : String(status.requiresOpenaiAuth)}`,
+  );
   if (status.account?.type === "chatgpt") {
     console.log(`Email: ${status.account.email}`);
   }
@@ -229,6 +232,9 @@ function printStatus(status: ProfileStatus): void {
   }
   if (status.usageSummary.primaryResetsAt !== null) {
     console.log(`Primary resets at: ${status.usageSummary.primaryResetsAt}`);
+  }
+  if (status.requiresOpenaiAuth) {
+    console.log("Usage availability: re-authenticate with OpenAI to refresh plan and quota data.");
   }
   console.log("");
 }
