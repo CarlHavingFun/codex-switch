@@ -249,7 +249,7 @@ powershell -ExecutionPolicy Bypass -File scripts/publish-windows-tray.ps1
 
 ## FAQ
 
-### Why is the default profile name something like `reviewer@example.com__66414859-b7e5-42c4-a8f4-549b05779e09`?
+### Why is the default profile name something like `user@example.com__66414859-b7e5-42c4-a8f4-549b05779e09`?
 
 That is the current auto-generated naming rule for imports and logins without a manually supplied profile name:
 

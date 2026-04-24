@@ -386,7 +386,7 @@ describe("codex-switch CLI", () => {
             desktopPid: null,
             monitorPid: null,
             executablePath: "C:\\Program Files\\WindowsApps\\OpenAI.Codex\\app\\Codex.exe",
-            sessionHome: "C:\\Users\\<user>\\.codex-switch\\desktop\\session\\home",
+      sessionHome: "C:\\Users\\<user>\\.codex-switch\\desktop\\session\\home",
             launchedAt: "2026-03-30T00:00:00.000Z",
             launchProfileId: "fixture-example-com-acct-cli",
             lastObservedAccountId: "acct_cli",
